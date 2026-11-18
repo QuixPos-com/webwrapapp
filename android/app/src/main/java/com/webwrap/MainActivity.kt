@@ -1,5 +1,6 @@
 package com.webwrap
 
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
@@ -31,6 +32,13 @@ class MainActivity : ReactActivity() {
     // Keep content below the status bar / clock (Android 15+ otherwise forces edge-to-edge).
     WindowCompat.setDecorFitsSystemWindows(window, true)
     DashAppIdentity.applyToActivity(this)
+    DashClipboardModule.handleShareIntent(this, intent)
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    DashClipboardModule.handleShareIntent(this, intent)
   }
 
   override fun onResume() {

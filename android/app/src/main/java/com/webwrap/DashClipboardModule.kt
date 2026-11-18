@@ -13,6 +13,7 @@ import android.os.Build
 import android.util.Base64
 import android.util.Log
 import android.util.Size
+import android.widget.Toast
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -30,8 +31,6 @@ import org.json.JSONObject
 class DashClipboardModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
-  private var cachedImageDataUri: String? = null
-  private var cachedImageAtMs: Long = 0
   private var cachedText: String? = null
   private var cachedHtml: String? = null
   private var clipListener: android.content.ClipboardManager.OnPrimaryClipChangedListener? = null
@@ -46,6 +45,7 @@ class DashClipboardModule(reactContext: ReactApplicationContext) :
           try {
             val description = describeClipboardJson()
             Log.i(TAG, "clipboard changed: $description")
+            preferCachedImage = false
             val text = readPrimaryClipText()
             if (text != null) {
               cachedText = text
@@ -85,6 +85,12 @@ class DashClipboardModule(reactContext: ReactApplicationContext) :
   @ReactMethod
   fun getImageDataUri(promise: Promise) {
     try {
+      if (preferCachedImage && cachedImageDataUri != null && isCacheFresh()) {
+        Log.d(TAG, "getImageDataUri: using shared/cached image len=${cachedImageDataUri!!.length}")
+        promise.resolve(cachedImageDataUri)
+        return
+      }
+
       val fresh = readPrimaryClipImage()
       if (fresh != null) {
         cachedImageDataUri = fresh
@@ -115,10 +121,14 @@ class DashClipboardModule(reactContext: ReactApplicationContext) :
   fun getClipboardContent(promise: Promise) {
     try {
       val image =
-          readPrimaryClipImage()?.also {
-            cachedImageDataUri = it
-            cachedImageAtMs = System.currentTimeMillis()
-          } ?: if (isCacheFresh()) cachedImageDataUri else null
+          if (preferCachedImage && cachedImageDataUri != null && isCacheFresh()) {
+            cachedImageDataUri
+          } else {
+            readPrimaryClipImage()?.also {
+              cachedImageDataUri = it
+              cachedImageAtMs = System.currentTimeMillis()
+            } ?: if (isCacheFresh()) cachedImageDataUri else null
+          }
 
       val text = readPrimaryClipText()?.also { cachedText = it } ?: cachedText
       val html = readPrimaryClipHtml()?.also { cachedHtml = it } ?: cachedHtml
@@ -419,78 +429,6 @@ class DashClipboardModule(reactContext: ReactApplicationContext) :
     return if (matcher.find()) matcher.group(0) else null
   }
 
-  private fun readImageFromUri(resolver: ContentResolver, uri: Uri): String? {
-    Log.d(TAG, "readImageFromUri: $uri type=${resolver.getType(uri)}")
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-      try {
-        val thumb = resolver.loadThumbnail(uri, Size(2048, 2048), null)
-        return bitmapToDataUri(thumb, resolver.getType(uri) ?: "image/jpeg")
-      } catch (error: Exception) {
-        Log.d(TAG, "loadThumbnail failed for $uri: ${error.message}")
-      }
-    }
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-      try {
-        val source = ImageDecoder.createSource(resolver, uri)
-        val bitmap = ImageDecoder.decodeBitmap(source)
-        return bitmapToDataUri(bitmap, resolver.getType(uri) ?: "image/jpeg")
-      } catch (error: Exception) {
-        Log.d(TAG, "ImageDecoder failed for $uri: ${error.message}")
-      }
-    }
-
-    try {
-      resolver.openTypedAssetFileDescriptor(uri, "image/*", null)?.use { afd ->
-        afd.createInputStream().use { input ->
-          decodeBitmap(input)?.let { bitmap ->
-            return bitmapToDataUri(bitmap, resolver.getType(uri) ?: "image/jpeg")
-          }
-        }
-      }
-    } catch (error: Exception) {
-      Log.d(TAG, "openTypedAssetFileDescriptor failed for $uri: ${error.message}")
-    }
-
-    var mimeType = resolver.getType(uri)
-    val bitmap =
-        try {
-          resolver.openInputStream(uri)?.use { input -> decodeBitmap(input) }
-        } catch (error: Exception) {
-          Log.w(TAG, "openInputStream failed for $uri: ${error.message}")
-          null
-        } ?: return null
-
-    if (mimeType.isNullOrBlank() || !mimeType.startsWith("image/")) {
-      mimeType = "image/jpeg"
-    }
-    return bitmapToDataUri(bitmap, mimeType)
-  }
-
-  private fun decodeBitmap(input: InputStream): Bitmap? = BitmapFactory.decodeStream(input)
-
-  private fun bitmapToDataUri(bitmap: Bitmap, mimeType: String): String {
-    val maxEdge = 1600
-    val scaled =
-        if (bitmap.width > maxEdge || bitmap.height > maxEdge) {
-          val scale = maxEdge.toFloat() / maxOf(bitmap.width, bitmap.height)
-          val width = (bitmap.width * scale).toInt().coerceAtLeast(1)
-          val height = (bitmap.height * scale).toInt().coerceAtLeast(1)
-          Bitmap.createScaledBitmap(bitmap, width, height, true)
-        } else {
-          bitmap
-        }
-
-    val outputStream = ByteArrayOutputStream()
-    scaled.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
-    if (scaled !== bitmap) {
-      scaled.recycle()
-    }
-    val encoded = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
-    return "data:image/png;base64,$encoded"
-  }
-
   companion object {
     const val NAME = "DashClipboard"
     private const val TAG = "DashClipboard"
@@ -499,5 +437,131 @@ class DashClipboardModule(reactContext: ReactApplicationContext) :
         Pattern.compile("data:image/[^;\\s\"']+;base64,[A-Za-z0-9+/=]+")
     private val IMG_SRC =
         Pattern.compile("""<img[^>]+src=["']([^"']+)["']""", Pattern.CASE_INSENSITIVE)
+
+    @Volatile private var cachedImageDataUri: String? = null
+    @Volatile private var cachedImageAtMs: Long = 0
+    @Volatile private var preferCachedImage: Boolean = false
+
+    fun handleShareIntent(context: Context, intent: Intent?) {
+      if (intent == null) return
+      val action = intent.action ?: return
+      if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return
+      val type = intent.type ?: ""
+      if (!type.startsWith("image/") && type != "*/*") return
+
+      val uris = ArrayList<Uri>()
+      if (action == Intent.ACTION_SEND) {
+        val uri =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+              intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+              @Suppress("DEPRECATION")
+              intent.getParcelableExtra(Intent.EXTRA_STREAM)
+            }
+        if (uri != null) uris.add(uri)
+      } else {
+        val list =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+              intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+              @Suppress("DEPRECATION")
+              intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+            }
+        if (list != null) uris.addAll(list)
+      }
+
+      if (uris.isEmpty()) return
+
+      val resolver = context.applicationContext.contentResolver
+      for (uri in uris) {
+        try {
+          val dataUri = readImageFromUri(resolver, uri)
+          if (dataUri != null) {
+            cachedImageDataUri = dataUri
+            cachedImageAtMs = System.currentTimeMillis()
+            preferCachedImage = true
+            Log.i(TAG, "handleShareIntent: cached shared image len=${dataUri.length}")
+            UiThreadUtil.runOnUiThread {
+              Toast.makeText(context.applicationContext, "Image ready to paste", Toast.LENGTH_SHORT).show()
+            }
+            return
+          }
+        } catch (error: Exception) {
+          Log.w(TAG, "handleShareIntent: failed reading $uri", error)
+        }
+      }
+    }
+
+    private fun readImageFromUri(resolver: ContentResolver, uri: Uri): String? {
+      Log.d(TAG, "readImageFromUri: $uri type=${resolver.getType(uri)}")
+
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        try {
+          val thumb = resolver.loadThumbnail(uri, Size(2048, 2048), null)
+          return bitmapToDataUri(thumb, resolver.getType(uri) ?: "image/jpeg")
+        } catch (error: Exception) {
+          Log.d(TAG, "loadThumbnail failed for $uri: ${error.message}")
+        }
+      }
+
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        try {
+          val source = ImageDecoder.createSource(resolver, uri)
+          val bitmap = ImageDecoder.decodeBitmap(source)
+          return bitmapToDataUri(bitmap, resolver.getType(uri) ?: "image/jpeg")
+        } catch (error: Exception) {
+          Log.d(TAG, "ImageDecoder failed for $uri: ${error.message}")
+        }
+      }
+
+      try {
+        resolver.openTypedAssetFileDescriptor(uri, "image/*", null)?.use { afd ->
+          afd.createInputStream().use { input ->
+            decodeBitmap(input)?.let { bitmap ->
+              return bitmapToDataUri(bitmap, resolver.getType(uri) ?: "image/jpeg")
+            }
+          }
+        }
+      } catch (error: Exception) {
+        Log.d(TAG, "openTypedAssetFileDescriptor failed for $uri: ${error.message}")
+      }
+
+      var mimeType = resolver.getType(uri)
+      val bitmap =
+          try {
+            resolver.openInputStream(uri)?.use { input -> decodeBitmap(input) }
+          } catch (error: Exception) {
+            Log.w(TAG, "openInputStream failed for $uri: ${error.message}")
+            null
+          } ?: return null
+
+      if (mimeType.isNullOrBlank() || !mimeType.startsWith("image/")) {
+        mimeType = "image/jpeg"
+      }
+      return bitmapToDataUri(bitmap, mimeType)
+    }
+
+    private fun decodeBitmap(input: InputStream): Bitmap? = BitmapFactory.decodeStream(input)
+
+    private fun bitmapToDataUri(bitmap: Bitmap, mimeType: String): String {
+      val maxEdge = 1600
+      val scaled =
+          if (bitmap.width > maxEdge || bitmap.height > maxEdge) {
+            val scale = maxEdge.toFloat() / maxOf(bitmap.width, bitmap.height)
+            val width = (bitmap.width * scale).toInt().coerceAtLeast(1)
+            val height = (bitmap.height * scale).toInt().coerceAtLeast(1)
+            Bitmap.createScaledBitmap(bitmap, width, height, true)
+          } else {
+            bitmap
+          }
+
+      val outputStream = ByteArrayOutputStream()
+      scaled.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+      if (scaled !== bitmap) {
+        scaled.recycle()
+      }
+      val encoded = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
+      return "data:image/png;base64,$encoded"
+    }
   }
 }
