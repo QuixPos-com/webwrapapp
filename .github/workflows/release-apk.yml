@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   build-apk:
     name: Build Release APK
@@ -32,9 +36,23 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: 'enhanced'
+          cache-cleanup: 'on-success'
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
 
       - name: Install npm dependencies
         run: npm ci
+
+      - name: Cache native CMake/NDK build outputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            android/app/.cxx
+            node_modules/**/android/.cxx
+          key: ${{ runner.os }}-cxx-${{ hashFiles('package-lock.json', 'android/build.gradle', 'android/app/build.gradle', 'android/gradle.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-cxx-
 
       - name: Accept Android SDK licenses
         run: |
@@ -46,18 +64,27 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew assembleRelease --no-daemon --build-cache
+
+      - name: Stage stable APK filenames
+        run: |
+          mkdir -p release-apks
+          for apk in android/app/build/outputs/apk/release/*.apk; do
+            base="$(basename "$apk")"
+            stable="$(echo "$base" | sed -E 's/-[0-9]{10}\.apk$/.apk/')"
+            cp "$apk" "release-apks/$stable"
+          done
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v7
         with:
           name: webwrap-release-apks
-          path: android/app/build/outputs/apk/release/*.apk
+          path: release-apks/*.apk
           if-no-files-found: error
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
-          files: android/app/build/outputs/apk/release/*.apk
+          files: release-apks/*.apk
           generate_release_notes: true

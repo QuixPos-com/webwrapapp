@@ -60,7 +60,7 @@ android {
             // see https://reactnative.dev/docs/signed-apk-android.
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
-            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
     }
     splits {
@@ -72,12 +72,17 @@ android {
         }
     }
 
-    applicationVariants.configureEach { variant ->
-        variant.outputs.configureEach { output ->
-            def timestamp = new Date().format("yyMMddHHmm")
-            def abi = output.getFilter("ABI")
+}
+
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        def timestamp = new Date().format("yyMMddHHmm")
+        variant.outputs.forEach { output ->
+            def abi = output.filters.find {
+                it.filterType == com.android.build.api.variant.FilterConfiguration.FilterType.ABI
+            }?.identifier
             def abiSuffix = abi ? "-${abi}" : ""
-            outputFileName = "app${abiSuffix}-${variant.buildType.name}-${timestamp}.apk"
+            output.outputFileName.set("app${abiSuffix}-${variant.buildType}-${timestamp}.apk")
         }
     }
 }

@@ -1,5 +1,7 @@
 # WebWrap
 
+**[Download Latest APK (`arm64-v8a`)](https://github.com/quixpos/webwrapapp/releases/latest/download/app-arm64-v8a-release.apk)** · [All Releases / Other ABIs (`armeabi-v7a`, `x86_64`, `x86`)](https://github.com/quixpos/webwrapapp/releases/latest)
+
 A React Native Android wrapper for turning any web app or dashboard into a multi-tab, keyboard-friendly tablet/phone application.
 
 ## Screenshots
