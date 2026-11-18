@@ -20,15 +20,13 @@ buildscript {
 
 apply plugin: "com.facebook.react.rootproject"
 
-// Windows: deep node_modules paths exceed Ninja's CMAKE_OBJECT_PATH_MAX (250),
-// so VisionCameraBarcodeScanner's native lib never builds and Nitro fails with
-// "BarcodeScannerFactory is not registered".
-if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")) {
-  subprojects { subproject ->
-    subproject.pluginManager.withPlugin("com.android.library") {
-      if (subproject.name != "react-native-vision-camera-barcode-scanner") {
-        return
-      }
+// Configure release CMake builds without debug info (Release instead of RelWithDebInfo),
+// and keep VisionCameraBarcodeScanner under Ninja's CMAKE_OBJECT_PATH_MAX on Windows.
+def isWindowsHost = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")
+subprojects { subproject ->
+  subproject.pluginManager.withPlugin("com.android.library") {
+    subproject.android.buildTypes.release.externalNativeBuild.cmake.arguments.add("-DCMAKE_BUILD_TYPE=Release")
+    if (isWindowsHost && subproject.name == "react-native-vision-camera-barcode-scanner") {
       def staging = new File("C:/cxx/vcbs")
       subproject.android.externalNativeBuild.cmake.buildStagingDirectory = staging
       println "[WebWrap] barcode-scanner CMake staging -> ${staging}"
