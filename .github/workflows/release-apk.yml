@@ -42,14 +42,32 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Cache Android NDK and Build-Tools
+        uses: actions/cache@v6
+        with:
+          path: |
+            /usr/local/lib/android/sdk/ndk/27.1.12297006
+            /usr/local/lib/android/sdk/build-tools/37.0.0
+            /usr/local/lib/android/sdk/platforms/android-37
+          key: ${{ runner.os }}-android-sdk-ndk27.1-bt37
+
+      - name: Set up ccache for C++/NDK builds
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-ccache-${{ github.ref_name }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-
+          max-size: 2G
+
       - name: Cache Gradle packages and wrapper
         uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-v2-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'package-lock.json', 'android/build.gradle', 'android/app/build.gradle', 'android/gradle.properties') }}
+          key: ${{ runner.os }}-gradle-v3-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'package-lock.json', 'android/build.gradle', 'android/app/build.gradle', 'android/gradle.properties') }}
           restore-keys: |
+            ${{ runner.os }}-gradle-v3-
             ${{ runner.os }}-gradle-v2-
 
       - name: Cache native CMake/NDK build outputs
@@ -58,8 +76,9 @@ jobs:
           path: |
             android/app/.cxx
             node_modules/**/android/.cxx
-          key: ${{ runner.os }}-cxx-v2-${{ hashFiles('package-lock.json', 'android/build.gradle', 'android/app/build.gradle', 'android/gradle.properties') }}
+          key: ${{ runner.os }}-cxx-v3-${{ hashFiles('package-lock.json', 'android/build.gradle', 'android/app/build.gradle', 'android/gradle.properties') }}
           restore-keys: |
+            ${{ runner.os }}-cxx-v3-
             ${{ runner.os }}-cxx-v2-
 
       - name: Accept Android SDK licenses
@@ -72,7 +91,7 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --build-cache --stacktrace \
+          ./gradlew assembleRelease --no-daemon --parallel --build-cache -x lint -x lintVitalRelease --stacktrace \
             -Dorg.gradle.internal.http.connectionTimeout=120000 \
             -Dorg.gradle.internal.http.socketTimeout=120000
           rm -f ~/.gradle/caches/modules-2/modules-2.lock
