@@ -41,7 +41,18 @@ jobs:
         run: npm ci
 
       - name: Cache Android NDK and Build-Tools
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache@v6
+        with:
+          path: |
+            /usr/local/lib/android/sdk/ndk/27.1.12297006
+            /usr/local/lib/android/sdk/build-tools/37.0.0
+            /usr/local/lib/android/sdk/platforms/android-37
+          key: ${{ runner.os }}-android-sdk-ndk27.1-bt37
+
+      - name: Restore Android NDK and Build-Tools cache
+        if: github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@v6
         with:
           path: |
             /usr/local/lib/android/sdk/ndk/27.1.12297006
@@ -55,9 +66,11 @@ jobs:
           key: ${{ runner.os }}-ccache-${{ github.ref_name }}
           restore-keys: |
             ${{ runner.os }}-ccache-
+          save: ${{ github.ref == 'refs/heads/main' }}
           max-size: 2G
 
       - name: Cache Gradle packages and wrapper
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache@v6
         with:
           path: |
@@ -68,8 +81,33 @@ jobs:
             ${{ runner.os }}-gradle-v3-
             ${{ runner.os }}-gradle-v2-
 
+      - name: Restore Gradle packages and wrapper cache
+        if: github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-v3-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'package-lock.json', 'android/build.gradle', 'android/app/build.gradle', 'android/gradle.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-v3-
+            ${{ runner.os }}-gradle-v2-
+
       - name: Cache native CMake/NDK build outputs
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache@v6
+        with:
+          path: |
+            android/app/.cxx
+            node_modules/**/android/.cxx
+          key: ${{ runner.os }}-cxx-v3-${{ hashFiles('package-lock.json', 'android/build.gradle', 'android/app/build.gradle', 'android/gradle.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-cxx-v3-
+            ${{ runner.os }}-cxx-v2-
+
+      - name: Restore native CMake/NDK build outputs cache
+        if: github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@v6
         with:
           path: |
             android/app/.cxx
