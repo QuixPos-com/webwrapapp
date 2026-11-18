@@ -1,4 +1,4 @@
-/** Polyfill navigator.clipboard.read() — async Clipboard API is unavailable on http:// WebViews. */
+/** Polyfill navigator.clipboard (read, readText, write, writeText) & permissions on http/https WebViews. */
 export const CLIPBOARD_BRIDGE_JS = `
   (function () {
     function dbg(stage, extra) {
@@ -9,119 +9,307 @@ export const CLIPBOARD_BRIDGE_JS = `
       } catch (e) {}
     }
 
-    if (!window.__dashClipboardPending) {
-      window.__dashClipboardPending = new Map();
-
-      if (typeof ClipboardItem === 'undefined') {
-        window.ClipboardItem = function (items) {
-          this._items = items;
-          this.types = Object.keys(items);
-        };
-        window.ClipboardItem.prototype.getType = function (type) {
-          return Promise.resolve(this._items[type]);
-        };
+    function createDashClipboardItem(itemsMap) {
+      var types = Object.keys(itemsMap);
+      if (typeof window.ClipboardItem === 'function') {
+        try {
+          return new window.ClipboardItem(itemsMap);
+        } catch (e) {}
       }
-
-      window.__dashClipboardReadResult = function (requestId, dataUri) {
-        dbg('result', { requestId: requestId, hasData: !!dataUri, len: dataUri ? dataUri.length : 0 });
-        var entry = window.__dashClipboardPending.get(requestId);
-        if (!entry) {
-          dbg('result_orphan', { requestId: requestId });
-          return;
-        }
-        window.__dashClipboardPending.delete(requestId);
-        if (!dataUri) {
-          entry.reject(new DOMException('No image on clipboard', 'NotFoundError'));
-          return;
-        }
-        (function dataUriToPngClipboardItems(dataUri) {
-          return new Promise(function (resolve, reject) {
-            var match = /^data:(image\\/[^;]+);base64,(.*)$/s.exec(dataUri || '');
-            if (!match) {
-              dbg('bad_data_uri', { prefix: String(dataUri).slice(0, 32) });
-              reject(new DOMException('No image on clipboard', 'NotFoundError'));
-              return;
-            }
-            var mime = match[1];
-            var raw = match[2];
-            if (mime === 'image/png') {
-              var binary = atob(raw);
-              var bytes = new Uint8Array(binary.length);
-              for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-              resolve([new ClipboardItem({ 'image/png': new Blob([bytes], { type: 'image/png' }) })]);
-              return;
-            }
-            var img = new Image();
-            img.onload = function () {
-              var canvas = document.createElement('canvas');
-              canvas.width = img.naturalWidth || img.width;
-              canvas.height = img.naturalHeight || img.height;
-              canvas.getContext('2d').drawImage(img, 0, 0);
-              canvas.toBlob(function (blob) {
-                if (!blob) {
-                  reject(new DOMException('Could not read clipboard image', 'NotReadableError'));
-                  return;
-                }
-                dbg('converted_blob', { size: blob.size, type: blob.type });
-                resolve([new ClipboardItem({ 'image/png': blob })]);
-              }, 'image/png');
-            };
-            img.onerror = function () {
-              dbg('image_decode_failed', { mime: mime });
-              reject(new DOMException('Could not read clipboard image', 'NotReadableError'));
-            };
-            img.src = dataUri;
-          });
-        })(dataUri).then(function (items) {
-          dbg('resolve_items', { count: items.length, types: items[0] && items[0].types });
-          entry.resolve(items);
-        }).catch(function (err) {
-          dbg('convert_failed', { message: err && err.message ? err.message : String(err) });
-          entry.reject(err);
-        });
+      return {
+        _items: itemsMap,
+        types: types,
+        getType: function (type) {
+          var v = itemsMap[type];
+          if (!v) {
+            return Promise.reject(new DOMException('Type ' + type + ' not found', 'NotFoundError'));
+          }
+          return Promise.resolve(v);
+        },
       };
-
     }
 
-    var nativeClipboard = navigator.clipboard || {};
-    var dashClipboardRead = function () {
-      dbg('read_called', { hadNativeRead: typeof nativeClipboard.read === 'function' });
+    if (typeof window.ClipboardItem === 'undefined') {
+      window.ClipboardItem = function (items) {
+        this._items = items || {};
+        this.types = Object.keys(this._items);
+      };
+      window.ClipboardItem.prototype.getType = function (type) {
+        var v = this._items[type];
+        if (!v) {
+          return Promise.reject(new DOMException('Type ' + type + ' not found', 'NotFoundError'));
+        }
+        return Promise.resolve(v);
+      };
+    }
+
+    function dataUriToPngBlob(dataUri) {
+      return new Promise(function (resolve, reject) {
+        var match = /^data:(image\\/[^;]+);base64,(.*)$/s.exec(dataUri || '');
+        if (!match) {
+          reject(new DOMException('Invalid clipboard image', 'NotFoundError'));
+          return;
+        }
+        var mime = match[1];
+        var raw = match[2];
+        if (mime === 'image/png') {
+          var binary = atob(raw);
+          var bytes = new Uint8Array(binary.length);
+          for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          resolve(new Blob([bytes], { type: 'image/png' }));
+          return;
+        }
+        var img = new Image();
+        img.onload = function () {
+          var canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth || img.width;
+          canvas.height = img.naturalHeight || img.height;
+          canvas.getContext('2d').drawImage(img, 0, 0);
+          canvas.toBlob(function (blob) {
+            if (!blob) {
+              reject(new DOMException('Could not read clipboard image', 'NotReadableError'));
+              return;
+            }
+            resolve(blob);
+          }, 'image/png');
+        };
+        img.onerror = function () {
+          reject(new DOMException('Could not read clipboard image', 'NotReadableError'));
+        };
+        img.src = dataUri;
+      });
+    }
+
+    if (!window.__dashClipboardPending) {
+      window.__dashClipboardPending = new Map();
+    }
+
+    window.__dashClipboardReadResult = function (requestId, payload) {
+      var entry = window.__dashClipboardPending.get(requestId);
+      if (!entry) {
+        dbg('result_orphan', { requestId: requestId });
+        return;
+      }
+      window.__dashClipboardPending.delete(requestId);
+
+      var dataUri = typeof payload === 'string' ? payload : (payload && payload.imageDataUri) || null;
+      var text = payload && typeof payload === 'object' && typeof payload.text === 'string' ? payload.text : null;
+      var html = payload && typeof payload === 'object' && typeof payload.html === 'string' ? payload.html : null;
+
+      dbg('result', {
+        requestId: requestId,
+        hasImage: !!dataUri,
+        imageLen: dataUri ? dataUri.length : 0,
+        hasText: !!text,
+      });
+
+      if (dataUri) {
+        dataUriToPngBlob(dataUri)
+          .then(function (pngBlob) {
+            var map = { 'image/png': pngBlob };
+            if (text) {
+              map['text/plain'] = new Blob([text], { type: 'text/plain' });
+            }
+            if (html) {
+              map['text/html'] = new Blob([html], { type: 'text/html' });
+            }
+            entry.resolve([createDashClipboardItem(map)]);
+          })
+          .catch(function (err) {
+            if (text) {
+              var fallbackMap = { 'text/plain': new Blob([text], { type: 'text/plain' }) };
+              if (html) fallbackMap['text/html'] = new Blob([html], { type: 'text/html' });
+              entry.resolve([createDashClipboardItem(fallbackMap)]);
+            } else {
+              dbg('convert_failed', { message: err && err.message ? err.message : String(err) });
+              entry.resolve([]);
+            }
+          });
+        return;
+      }
+
+      if (text || html) {
+        var textMap = {};
+        if (text) textMap['text/plain'] = new Blob([text], { type: 'text/plain' });
+        if (html) textMap['text/html'] = new Blob([html], { type: 'text/html' });
+        entry.resolve([createDashClipboardItem(textMap)]);
+        return;
+      }
+
+      entry.resolve([]);
+    };
+
+    window.__dashClipboardTextResult = function (requestId, text) {
+      var entry = window.__dashClipboardPending.get(requestId);
+      if (!entry) return;
+      window.__dashClipboardPending.delete(requestId);
+      entry.resolve(typeof text === 'string' ? text : '');
+    };
+
+    window.__dashClipboardWriteResult = function (requestId, ok) {
+      var entry = window.__dashClipboardPending.get(requestId);
+      if (!entry) return;
+      window.__dashClipboardPending.delete(requestId);
+      if (ok === false) {
+        entry.reject(new DOMException('Clipboard write failed', 'NotAllowedError'));
+      } else {
+        entry.resolve(undefined);
+      }
+    };
+
+    function sendClipboardRequest(msg, timeoutMs) {
       return new Promise(function (resolve, reject) {
         if (!window.ReactNativeWebView || !window.ReactNativeWebView.postMessage) {
-          dbg('read_no_bridge', null);
           reject(new DOMException('Clipboard unavailable', 'NotSupportedError'));
           return;
         }
         var requestId = String(Date.now()) + ':' + Math.random();
         window.__dashClipboardPending.set(requestId, { resolve: resolve, reject: reject });
-        dbg('read_post', { requestId: requestId });
-        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'clipboardRead', requestId: requestId }));
+        var fullMsg = Object.assign({}, msg, { requestId: requestId });
+        window.ReactNativeWebView.postMessage(JSON.stringify(fullMsg));
         setTimeout(function () {
           if (!window.__dashClipboardPending.has(requestId)) return;
           window.__dashClipboardPending.delete(requestId);
-          dbg('read_timeout', { requestId: requestId });
-          reject(new DOMException('Clipboard read timed out', 'AbortError'));
+          reject(new DOMException('Clipboard operation timed out', 'AbortError'));
+        }, timeoutMs || 15000);
+      });
+    }
+
+    var dashClipboardRead = function () {
+      dbg('read_called', null);
+      return sendClipboardRequest({ type: 'clipboardRead' }, 15000);
+    };
+
+    var dashClipboardReadText = function () {
+      dbg('readText_called', null);
+      return sendClipboardRequest({ type: 'clipboardReadText' }, 10000);
+    };
+
+    var dashClipboardWriteText = function (text) {
+      var str = text == null ? '' : String(text);
+      dbg('writeText_called', { len: str.length });
+      return sendClipboardRequest({ type: 'clipboardWriteText', text: str }, 10000);
+    };
+
+    function blobToDataUri(blob) {
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onloadend = function () { resolve(reader.result); };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    var dashClipboardWrite = function (items) {
+      dbg('write_called', { count: items ? items.length : 0 });
+      var list = Array.isArray(items) ? items : [];
+      if (!list.length) {
+        return Promise.resolve(undefined);
+      }
+      var item = list[0];
+      var types = (item && item.types) || [];
+      var textPromise = types.indexOf('text/plain') !== -1 && typeof item.getType === 'function'
+        ? Promise.resolve(item.getType('text/plain')).then(function (b) { return b && b.text ? b.text() : ''; }).catch(function () { return null; })
+        : Promise.resolve(null);
+
+      var imgType = null;
+      for (var i = 0; i < types.length; i++) {
+        if (String(types[i]).indexOf('image/') === 0) {
+          imgType = types[i];
+          break;
+        }
+      }
+      var imgPromise = imgType && typeof item.getType === 'function'
+        ? Promise.resolve(item.getType(imgType)).then(blobToDataUri).catch(function () { return null; })
+        : Promise.resolve(null);
+
+      return Promise.all([textPromise, imgPromise]).then(function (res) {
+        return sendClipboardRequest({
+          type: 'clipboardWrite',
+          text: res[0],
+          imageDataUri: res[1],
         }, 15000);
       });
     };
+
+    if (typeof window.Clipboard !== 'undefined' && window.Clipboard.prototype) {
+      try {
+        window.Clipboard.prototype.read = dashClipboardRead;
+        window.Clipboard.prototype.readText = dashClipboardReadText;
+        window.Clipboard.prototype.write = dashClipboardWrite;
+        window.Clipboard.prototype.writeText = dashClipboardWriteText;
+      } catch (e) {}
+    }
+
+    var clipboardObj = {
+      read: dashClipboardRead,
+      readText: dashClipboardReadText,
+      write: dashClipboardWrite,
+      writeText: dashClipboardWriteText,
+      addEventListener: function () {},
+      removeEventListener: function () {},
+      dispatchEvent: function () { return true; },
+    };
+
+    try {
+      Object.defineProperty(window, 'isSecureContext', {
+        configurable: true,
+        enumerable: true,
+        get: function () { return true; },
+      });
+    } catch (e) {}
+
+    if (typeof Navigator !== 'undefined' && Navigator.prototype) {
+      try {
+        Object.defineProperty(Navigator.prototype, 'clipboard', {
+          configurable: true,
+          enumerable: true,
+          get: function () { return clipboardObj; },
+        });
+      } catch (e) {}
+    }
 
     try {
       Object.defineProperty(navigator, 'clipboard', {
         configurable: true,
         enumerable: true,
-        value: {
-          read: dashClipboardRead,
-          readText: nativeClipboard.readText ? nativeClipboard.readText.bind(nativeClipboard) : undefined,
-          write: nativeClipboard.write ? nativeClipboard.write.bind(nativeClipboard) : undefined,
-          writeText: nativeClipboard.writeText ? nativeClipboard.writeText.bind(nativeClipboard) : undefined,
-        },
+        get: function () { return clipboardObj; },
       });
       dbg('installed', { readType: typeof navigator.clipboard.read });
     } catch (e) {
-      if (!navigator.clipboard) navigator.clipboard = {};
-      navigator.clipboard.read = dashClipboardRead;
+      try {
+        navigator.clipboard = clipboardObj;
+      } catch (e2) {}
+      if (navigator.clipboard) {
+        try {
+          navigator.clipboard.read = dashClipboardRead;
+          navigator.clipboard.readText = dashClipboardReadText;
+          navigator.clipboard.write = dashClipboardWrite;
+          navigator.clipboard.writeText = dashClipboardWriteText;
+        } catch (e3) {}
+      }
       dbg('installed_fallback', { message: String(e) });
     }
+
+    if (navigator.permissions && typeof navigator.permissions.query === 'function' && !window.__dashPermissionsPatched) {
+      window.__dashPermissionsPatched = true;
+      var origQuery = navigator.permissions.query.bind(navigator.permissions);
+      navigator.permissions.query = function (descriptor) {
+        var name = descriptor && descriptor.name ? String(descriptor.name) : '';
+        if (name === 'clipboard-read' || name === 'clipboard-write' || name === 'clipboard-sanitized-write') {
+          return Promise.resolve({
+            state: 'granted',
+            name: name,
+            onchange: null,
+            addEventListener: function () {},
+            removeEventListener: function () {},
+            dispatchEvent: function () { return true; },
+          });
+        }
+        return origQuery(descriptor);
+      };
+    }
+
     window.__dashClipboardBridge = true;
   })();
   true;

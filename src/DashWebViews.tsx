@@ -2,7 +2,13 @@ import React, { useCallback } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { WebView } from 'react-native-webview'
 import type { Tab } from './tabs'
-import { readClipboardImageDataUri } from './dashClipboard'
+import {
+  ClipboardContent,
+  readClipboardContent,
+  readClipboardText,
+  writeClipboardImageDataUri,
+  writeClipboardText,
+} from './dashClipboard'
 import {
   formatGoogleSignInError,
   requestNativeGoogleIdToken,
@@ -39,35 +45,85 @@ export function DashWebViews({
   onTabTitle,
   onPageFavicon,
 }: DashWebViewsProps): React.JSX.Element {
-  const respondClipboardRead = useCallback((tabId: string, requestId: string, dataUri: string | null) => {
-    console.log(
-      `[dash-clipboard] respond tab=${tabId} requestId=${requestId} bytes=${dataUri?.length ?? 0}`,
-    )
-    const webView = webRefs.current[tabId]
-    if (!webView) {
-      console.log(`[dash-clipboard] respond: no webview for tab ${tabId}`)
-      return
-    }
-    const js = `
-      window.__dashClipboardReadResult(${JSON.stringify(requestId)}, ${JSON.stringify(dataUri)});
-      true;
-    `
-    webView.injectJavaScript(js)
-  }, [webRefs])
+  const respondClipboardRead = useCallback(
+    (tabId: string, requestId: string, content: ClipboardContent) => {
+      console.log(
+        `[dash-clipboard] respond tab=${tabId} requestId=${requestId} imgBytes=${content.imageDataUri?.length ?? 0} textLen=${content.text?.length ?? 0}`,
+      )
+      const webView = webRefs.current[tabId]
+      if (!webView) {
+        console.log(`[dash-clipboard] respond: no webview for tab ${tabId}`)
+        return
+      }
+      const js = `
+        window.__dashClipboardReadResult(${JSON.stringify(requestId)}, ${JSON.stringify(content)});
+        true;
+      `
+      webView.injectJavaScript(js)
+    },
+    [webRefs],
+  )
 
   const handleClipboardRead = useCallback(
     (tabId: string, requestId: string) => {
       ;(async () => {
         try {
-          const dataUri = await readClipboardImageDataUri()
-          respondClipboardRead(tabId, requestId, dataUri)
+          const content = await readClipboardContent()
+          respondClipboardRead(tabId, requestId, content)
         } catch (error) {
           console.log('[dash-clipboard] handle failed:', error)
-          respondClipboardRead(tabId, requestId, null)
+          respondClipboardRead(tabId, requestId, { imageDataUri: null, text: null, html: null })
         }
       })()
     },
     [respondClipboardRead],
+  )
+
+  const handleClipboardReadText = useCallback(
+    (tabId: string, requestId: string) => {
+      ;(async () => {
+        try {
+          const text = await readClipboardText()
+          webRefs.current[tabId]?.injectJavaScript(`
+            window.__dashClipboardTextResult(${JSON.stringify(requestId)}, ${JSON.stringify(text)});
+            true;
+          `)
+        } catch (error) {
+          console.log('[dash-clipboard] readText failed:', error)
+          webRefs.current[tabId]?.injectJavaScript(`
+            window.__dashClipboardTextResult(${JSON.stringify(requestId)}, "");
+            true;
+          `)
+        }
+      })()
+    },
+    [webRefs],
+  )
+
+  const handleClipboardWrite = useCallback(
+    (tabId: string, requestId: string, text: string | null, imageDataUri: string | null) => {
+      ;(async () => {
+        try {
+          if (typeof text === 'string') {
+            await writeClipboardText(text)
+          }
+          if (typeof imageDataUri === 'string' && imageDataUri.length > 0) {
+            await writeClipboardImageDataUri(imageDataUri)
+          }
+          webRefs.current[tabId]?.injectJavaScript(`
+            window.__dashClipboardWriteResult(${JSON.stringify(requestId)}, true);
+            true;
+          `)
+        } catch (error) {
+          console.log('[dash-clipboard] write failed:', error)
+          webRefs.current[tabId]?.injectJavaScript(`
+            window.__dashClipboardWriteResult(${JSON.stringify(requestId)}, false);
+            true;
+          `)
+        }
+      })()
+    },
+    [webRefs],
   )
 
   const respondGoogleSignIn = useCallback(
@@ -155,6 +211,28 @@ export function DashWebViews({
                 const msg = JSON.parse(raw)
                 if (msg?.type === 'clipboardRead' && typeof msg.requestId === 'string') {
                   handleClipboardRead(tab.id, msg.requestId)
+                  return
+                }
+                if (msg?.type === 'clipboardReadText' && typeof msg.requestId === 'string') {
+                  handleClipboardReadText(tab.id, msg.requestId)
+                  return
+                }
+                if (msg?.type === 'clipboardWriteText' && typeof msg.requestId === 'string') {
+                  handleClipboardWrite(
+                    tab.id,
+                    msg.requestId,
+                    typeof msg.text === 'string' ? msg.text : '',
+                    null,
+                  )
+                  return
+                }
+                if (msg?.type === 'clipboardWrite' && typeof msg.requestId === 'string') {
+                  handleClipboardWrite(
+                    tab.id,
+                    msg.requestId,
+                    typeof msg.text === 'string' ? msg.text : null,
+                    typeof msg.imageDataUri === 'string' ? msg.imageDataUri : null,
+                  )
                   return
                 }
                 if (msg?.type === 'clipboardDebug') {
