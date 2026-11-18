@@ -1,0 +1,37 @@
+buildscript {
+    ext {
+        buildToolsVersion = "36.0.0"
+        minSdkVersion = 24
+        compileSdkVersion = 36
+        targetSdkVersion = 36
+        ndkVersion = "27.1.12297006"
+        kotlinVersion = "2.1.20"
+    }
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle")
+        classpath("com.facebook.react:react-native-gradle-plugin")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
+    }
+}
+
+apply plugin: "com.facebook.react.rootproject"
+
+// Windows: deep node_modules paths exceed Ninja's CMAKE_OBJECT_PATH_MAX (250),
+// so VisionCameraBarcodeScanner's native lib never builds and Nitro fails with
+// "BarcodeScannerFactory is not registered".
+if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")) {
+  subprojects { subproject ->
+    subproject.pluginManager.withPlugin("com.android.library") {
+      if (subproject.name != "react-native-vision-camera-barcode-scanner") {
+        return
+      }
+      def staging = new File("C:/cxx/vcbs")
+      subproject.android.externalNativeBuild.cmake.buildStagingDirectory = staging
+      println "[WebWrap] barcode-scanner CMake staging -> ${staging}"
+    }
+  }
+}
