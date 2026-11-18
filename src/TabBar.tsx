@@ -1,5 +1,6 @@
 import React from 'react'
 import {
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -8,6 +9,7 @@ import {
 } from 'react-native'
 import IonIcon from 'react-native-vector-icons/Ionicons'
 import type { Tab } from './tabs'
+import { DEFAULT_APP_NAME } from './dashAppIdentity'
 
 const TAB_DELETE_GREY = '#9e9e9e'
 const TAB_DELETE_BLUE = '#2196F3'
@@ -23,6 +25,8 @@ type TabBarProps = {
   tabTitles: Record<string, string>
   tabDeleteMode: boolean
   isDarkMode: boolean
+  appName?: string
+  appIconUri?: string | null
   onTabPress: (tabId: string) => void
   onAddTab: () => void
   onToggleTabDeleteMode: () => void
@@ -35,6 +39,8 @@ export function TabBar({
   tabTitles,
   tabDeleteMode,
   isDarkMode,
+  appName,
+  appIconUri,
   onTabPress,
   onAddTab,
   onToggleTabDeleteMode,
@@ -54,8 +60,16 @@ export function TabBar({
   const tabDeleteTextColor = isDarkMode ? '#ffcdd2' : TAB_DELETE_TAB_TEXT
   const canToggleTabDelete = tabs.length > 1 || tabDeleteMode
 
+  const fallbackSiteName =
+    appName && appName.trim() && appName.trim() !== DEFAULT_APP_NAME ? appName.trim() : undefined
+
   return (
     <View style={[styles.tabBar, tabBarStyle]} focusable={false}>
+      {appIconUri ? (
+        <View style={styles.appBadge} focusable={false}>
+          <Image source={{ uri: appIconUri }} style={styles.appIcon} />
+        </View>
+      ) : null}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -66,7 +80,7 @@ export function TabBar({
       >
         {tabs.map((tab, index) => {
           const isActive = tab.id === activeTabId
-          const pageTitle = tabTitles[tab.id]
+          const pageTitle = tabTitles[tab.id] ?? fallbackSiteName
           const fLabel = `F${index + 1}`
           const titleColor = tabDeleteMode
             ? tabDeleteTextColor
@@ -165,6 +179,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderBottomWidth: StyleSheet.hairlineWidth,
     minHeight: 40,
+  },
+  appBadge: {
+    paddingLeft: 10,
+    paddingRight: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  appIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 4,
   },
   tabBarScroll: {
     flex: 1,

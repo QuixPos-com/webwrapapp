@@ -1,6 +1,6 @@
 # WebWrap
 
-**[Download Latest APK (`arm64-v8a`)](https://github.com/quixpos/webwrapapp/releases/latest/download/app-arm64-v8a-release.apk)** · [All Releases / Other ABIs (`armeabi-v7a`, `x86_64`, `x86`)](https://github.com/quixpos/webwrapapp/releases/latest)
+**[Download Latest APK (`arm64-v8a`)](https://github.com/QuixPos-com/webwrapapp/releases/latest/download/app-arm64-v8a-release.apk)** · [All Releases / Other ABIs (`armeabi-v7a`, `x86_64`, `x86`)](https://github.com/QuixPos-com/webwrapapp/releases/latest)
 
 A React Native Android wrapper for turning any web app or dashboard into a multi-tab, keyboard-friendly tablet/phone application.
 
@@ -17,6 +17,7 @@ A React Native Android wrapper for turning any web app or dashboard into a multi
 ## Features
 
 - **Multi-Tab F-Key Workspace (`F1`–`F12`)**: Native top tab bar with `+` to open tabs, automatic `document.title` syncing, and a guarded trash-mode toggle to prevent accidental tab closes.
+- **Dynamic App Icon & App Name**: Automatically loads the active website's favicon and page title (`document.title`) and applies them as the App Icon and App Name in Android system menus (Recents/Overview, window headers, launcher shortcuts) and in-app menus.
 - **Hardware Keyboard Support**:
   - `F1`–`F12` (or `Ctrl+1`–`Ctrl+9`, `Ctrl+0`, `Ctrl+-`, `Ctrl+=`) switch to or create tabs `1`–`12`.
   - Arrow keys and `Escape` (as well as Android Back) are forwarded directly to the active WebView while keeping keyboard focus inside the page.

@@ -23,8 +23,16 @@ import {
 } from './dashSettings'
 import { probeFirstReachableLocalServer } from './localServerProbe'
 import { buildApplyWebViewScaleJs, getWebViewScaleForWindow } from './webViewScale'
-import { buildInjectedJs } from './webViewBridges'
+import { buildInjectedJs, isUrlLikeTitle } from './webViewBridges'
 import { configureGoogleSignIn } from './dashGoogleSignIn'
+import {
+  AppIdentityStatus,
+  DEFAULT_APP_NAME,
+  clearAppIdentity,
+  getAppIdentityStatus,
+  syncWebsiteIdentity,
+  updateAppBranding,
+} from './dashAppIdentity'
 import { TabBar } from './TabBar'
 import { DashWebViews } from './DashWebViews'
 import { useTabs } from './useTabs'
@@ -39,6 +47,11 @@ function App(): React.JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [dashSettings, setDashSettings] = useState<DashSettings | null>(null)
   const [webViewReloadToken, setWebViewReloadToken] = useState(0)
+  const [appIdentity, setAppIdentity] = useState<AppIdentityStatus>({
+    siteUrl: '',
+    appName: DEFAULT_APP_NAME,
+    iconDataUri: null,
+  })
 
   const {
     tabs,
@@ -52,6 +65,7 @@ function App(): React.JSX.Element {
     selectOrCreateTab,
     closeTab,
     handleTabTitle,
+    clearTabTitles,
     toggleTabDeleteMode,
   } = useTabs(webRefs)
 
@@ -141,6 +155,11 @@ function App(): React.JSX.Element {
         setDashSettings(settings)
       }
     })
+    getAppIdentityStatus().then((status) => {
+      if (!cancelled) {
+        setAppIdentity(status)
+      }
+    })
     return () => {
       cancelled = true
     }
@@ -178,24 +197,89 @@ function App(): React.JSX.Element {
     }
   }, [dashSettings])
 
+  const activeAuthHeader = useMemo(() => {
+    if (connectionKind === 'remote' && dashSettings) {
+      return buildRemoteBasicAuthHeader(dashSettings)
+    }
+    return null
+  }, [connectionKind, dashSettings])
+
   const webViewSource = useMemo(() => {
     if (!dashUrl) {
       return null
     }
-    if (connectionKind === 'remote' && dashSettings) {
-      const auth = buildRemoteBasicAuthHeader(dashSettings)
-      if (auth) {
-        return { uri: dashUrl, headers: { Authorization: auth } }
-      }
+    if (activeAuthHeader) {
+      return { uri: dashUrl, headers: { Authorization: activeAuthHeader } }
     }
     return { uri: dashUrl }
-  }, [dashUrl, connectionKind, dashSettings])
+  }, [dashUrl, activeAuthHeader])
 
-  const handleSettingsSaved = useCallback((settings: DashSettings) => {
-    setDashSettings(settings)
-    // Force WebView remount even when the resolved URL is unchanged.
-    setWebViewReloadToken((n) => n + 1)
-  }, [])
+  useEffect(() => {
+    if (dashSettings === null) {
+      return
+    }
+    let cancelled = false
+    const trimmedUrl = dashUrl?.trim() ?? ''
+    if (!trimmedUrl) {
+      clearAppIdentity().then((status) => {
+        if (!cancelled) {
+          setAppIdentity(status)
+        }
+      })
+      return () => {
+        cancelled = true
+      }
+    }
+    syncWebsiteIdentity(trimmedUrl, activeAuthHeader).then((status) => {
+      if (!cancelled) {
+        setAppIdentity(status)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [dashUrl, activeAuthHeader, dashSettings, webViewReloadToken])
+
+  const handlePageTitle = useCallback(
+    (tabId: string, title: string | undefined) => {
+      handleTabTitle(tabId, title)
+      const cleaned = typeof title === 'string' ? title.trim() : ''
+      if (!cleaned || isUrlLikeTitle(cleaned)) {
+        return
+      }
+      updateAppBranding({
+        siteUrl: dashUrl,
+        title: cleaned,
+        authHeader: activeAuthHeader,
+      }).then(setAppIdentity)
+    },
+    [handleTabTitle, dashUrl, activeAuthHeader],
+  )
+
+  const handlePageFavicon = useCallback(
+    (iconUrl: string | null, dataUri: string | null) => {
+      if (!iconUrl && !dataUri) {
+        return
+      }
+      updateAppBranding({
+        siteUrl: dashUrl,
+        iconDataUri: dataUri,
+        iconUrl,
+        authHeader: activeAuthHeader,
+      }).then(setAppIdentity)
+    },
+    [dashUrl, activeAuthHeader],
+  )
+
+  const handleSettingsSaved = useCallback(
+    (settings: DashSettings) => {
+      clearTabTitles()
+      setDashSettings(settings)
+      // Force WebView remount even when the resolved URL is unchanged.
+      setWebViewReloadToken((n) => n + 1)
+    },
+    [clearTabTitles],
+  )
 
   const handleLocalCertChanged = useCallback(() => {
     setWebViewReloadToken((n) => n + 1)
@@ -302,6 +386,8 @@ function App(): React.JSX.Element {
         tabTitles={tabTitles}
         tabDeleteMode={tabDeleteMode}
         isDarkMode={isDarkMode}
+        appName={appIdentity.appName}
+        appIconUri={appIdentity.iconDataUri}
         onTabPress={handleTabPress}
         onAddTab={addTab}
         onToggleTabDeleteMode={toggleTabDeleteMode}
@@ -319,7 +405,8 @@ function App(): React.JSX.Element {
           activeTabIdRef={activeTabIdRef}
           focusActiveWebView={focusActiveWebView}
           selectOrCreateTab={selectOrCreateTab}
-          onTabTitle={handleTabTitle}
+          onTabTitle={handlePageTitle}
+          onPageFavicon={handlePageFavicon}
         />
       ) : null}
       <Modal
@@ -343,6 +430,8 @@ function App(): React.JSX.Element {
             onLocalCertChanged={handleLocalCertChanged}
             activeConnectionUrl={dashUrl}
             activeConnectionKind={connectionKind}
+            appName={appIdentity.appName}
+            appIconUri={appIdentity.iconDataUri}
           />
         </SafeAreaView>
       </Modal>

@@ -150,9 +150,20 @@ export const FKEY_BRIDGE_JS = `
 /** Push document.title to RN — navigation title often stays as host/IP after JS sets title. */
 export const TITLE_BRIDGE_JS = `
   (function () {
-    if (window.__dashTitleBridge) return true;
+    if (window.__dashTitleBridge) {
+      if (typeof window.__dashReadTitle === 'function') window.__dashReadTitle();
+      return true;
+    }
     window.__dashTitleBridge = true;
     var lastSent = null;
+    function getBestPageTitle() {
+      var raw = document.title ? String(document.title).trim() : '';
+      if (raw) return raw;
+      var meta = document.querySelector(
+        'meta[name="application-name"][content], meta[property="og:site_name"][content], meta[property="og:title"][content]'
+      );
+      return meta ? String(meta.getAttribute('content') || '').trim() : '';
+    }
     function postTitle(title) {
       var t = (title == null ? '' : String(title)).trim();
       if (!t || t === lastSent) return;
@@ -162,8 +173,9 @@ export const TITLE_BRIDGE_JS = `
       }
     }
     function readTitle() {
-      postTitle(document.title);
+      postTitle(getBestPageTitle());
     }
+    window.__dashReadTitle = readTitle;
     try {
       var desc = Object.getOwnPropertyDescriptor(Document.prototype, 'title')
         || Object.getOwnPropertyDescriptor(HTMLDocument.prototype, 'title');
@@ -179,18 +191,210 @@ export const TITLE_BRIDGE_JS = `
         });
       }
     } catch (e) {}
-    var titleEl = document.querySelector('title');
-    if (titleEl && typeof MutationObserver !== 'undefined') {
-      new MutationObserver(readTitle).observe(titleEl, {
+    function attachObserver() {
+      if (window.__dashTitleObserverAttached || typeof MutationObserver === 'undefined') return;
+      var root = document.head || document.documentElement;
+      if (!root) return;
+      window.__dashTitleObserverAttached = true;
+      new MutationObserver(readTitle).observe(root, {
         childList: true,
         characterData: true,
         subtree: true,
       });
     }
+    attachObserver();
+    document.addEventListener('DOMContentLoaded', function () {
+      attachObserver();
+      readTitle();
+    });
+    window.addEventListener('load', function () {
+      attachObserver();
+      readTitle();
+    });
     readTitle();
     setTimeout(readTitle, 0);
     setTimeout(readTitle, 250);
     setTimeout(readTitle, 1000);
+  })();
+  true;
+`
+
+/** Discover the website's favicon / touch icon, rasterize to PNG when possible, and push to RN. */
+export const FAVICON_BRIDGE_JS = `
+  (function () {
+    if (window.__dashFaviconBridge) {
+      if (typeof window.__dashReadFavicon === 'function') window.__dashReadFavicon();
+      return true;
+    }
+    window.__dashFaviconBridge = true;
+    var lastResolvedKey = null;
+    var resolving = false;
+
+    function collectCandidates() {
+      var links = Array.prototype.slice.call(
+        document.querySelectorAll('link[rel][href]')
+      );
+      var scored = [];
+      for (var i = 0; i < links.length; i++) {
+        var link = links[i];
+        var rel = String(link.getAttribute('rel') || '').toLowerCase();
+        if (rel.indexOf('icon') === -1) continue;
+        var href = link.href || link.getAttribute('href') || '';
+        if (!href) continue;
+        try {
+          href = new URL(href, window.location.href).href;
+        } catch (e) { continue; }
+        var sizes = String(link.getAttribute('sizes') || '').toLowerCase();
+        var type = String(link.getAttribute('type') || '').toLowerCase();
+        var score = 32;
+        var m = /(\\d+)x\\d+/.exec(sizes);
+        if (m) {
+          score = Math.min(512, parseInt(m[1], 10) || 32);
+        } else if (sizes === 'any' || type.indexOf('svg') !== -1 || /\\.svg(\\?|$)/i.test(href)) {
+          score = 256;
+        } else if (rel.indexOf('apple-touch-icon') !== -1) {
+          score = 180;
+        }
+        scored.push({ href: href, score: score });
+      }
+      scored.sort(function (a, b) { return b.score - a.score; });
+      var unique = [];
+      var seen = {};
+      for (var j = 0; j < scored.length; j++) {
+        var u = scored[j].href;
+        if (!seen[u]) {
+          seen[u] = true;
+          unique.push(u);
+        }
+      }
+      try {
+        var defaultFavicon = new URL('/favicon.ico', window.location.href).href;
+        if (!seen[defaultFavicon]) {
+          unique.push(defaultFavicon);
+        }
+      } catch (e) {}
+      return unique;
+    }
+
+    function renderImageSourceToPng(src) {
+      return new Promise(function (resolve, reject) {
+        var img = new Image();
+        img.onload = function () {
+          try {
+            var size = 192;
+            var canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size;
+            var ctx = canvas.getContext('2d');
+            var w = img.naturalWidth || img.width || size;
+            var h = img.naturalHeight || img.height || size;
+            var scale = Math.min(size / w, size / h);
+            var dw = w * scale;
+            var dh = h * scale;
+            var dx = (size - dw) / 2;
+            var dy = (size - dh) / 2;
+            ctx.drawImage(img, dx, dy, dw, dh);
+            var png = canvas.toDataURL('image/png');
+            if (png && png.indexOf('data:image/png;base64,') === 0 && png.length > 64) {
+              resolve(png);
+            } else {
+              reject(new Error('Empty canvas output'));
+            }
+          } catch (err) {
+            reject(err);
+          }
+        };
+        img.onerror = function () {
+          reject(new Error('Image load failed'));
+        };
+        img.src = src;
+      });
+    }
+
+    function fetchCandidateAsPng(url) {
+      if (/^data:image\\//i.test(url)) {
+        return renderImageSourceToPng(url);
+      }
+      return fetch(url, { credentials: 'include' })
+        .then(function (resp) {
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          return resp.blob();
+        })
+        .then(function (blob) {
+          if (!blob || blob.size === 0) throw new Error('Empty blob');
+          var objUrl = URL.createObjectURL(blob);
+          return renderImageSourceToPng(objUrl).finally(function () {
+            try { URL.revokeObjectURL(objUrl); } catch (e) {}
+          });
+        });
+    }
+
+    function postFavicon(iconUrl, dataUri) {
+      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'pageFavicon',
+          iconUrl: iconUrl || null,
+          dataUri: dataUri || null,
+        }));
+      }
+    }
+
+    function resolveFavicon() {
+      if (resolving) return;
+      var candidates = collectCandidates();
+      if (!candidates.length) return;
+      var key = candidates.join('|');
+      if (key === lastResolvedKey) return;
+      resolving = true;
+
+      var idx = 0;
+      function tryNext() {
+        if (idx >= candidates.length) {
+          resolving = false;
+          lastResolvedKey = key;
+          postFavicon(candidates[0], null);
+          return;
+        }
+        var current = candidates[idx++];
+        fetchCandidateAsPng(current)
+          .then(function (dataUri) {
+            resolving = false;
+            lastResolvedKey = key;
+            postFavicon(current, dataUri);
+          })
+          .catch(function () {
+            tryNext();
+          });
+      }
+      tryNext();
+    }
+
+    window.__dashReadFavicon = resolveFavicon;
+    function attachHeadObserver() {
+      if (window.__dashFaviconObserverAttached || typeof MutationObserver === 'undefined') return;
+      var head = document.head || document.documentElement;
+      if (!head) return;
+      window.__dashFaviconObserverAttached = true;
+      new MutationObserver(function () {
+        resolveFavicon();
+      }).observe(head, {
+        childList: true,
+        attributes: true,
+        subtree: true,
+        attributeFilter: ['href', 'rel', 'sizes'],
+      });
+    }
+    attachHeadObserver();
+    document.addEventListener('DOMContentLoaded', function () {
+      attachHeadObserver();
+      resolveFavicon();
+    });
+    window.addEventListener('load', function () {
+      attachHeadObserver();
+      resolveFavicon();
+    });
+    setTimeout(resolveFavicon, 150);
+    setTimeout(resolveFavicon, 1000);
   })();
   true;
 `
@@ -276,5 +480,5 @@ export const GOOGLE_SIGNIN_BRIDGE_JS = `
 `
 
 export function buildInjectedJs(applyWebViewScaleJs: string): string {
-  return `${CLIPBOARD_BRIDGE_JS}\n${GOOGLE_SIGNIN_BRIDGE_JS}\n${applyWebViewScaleJs}\n${FKEY_BRIDGE_JS}\n${TITLE_BRIDGE_JS}`
+  return `${CLIPBOARD_BRIDGE_JS}\n${GOOGLE_SIGNIN_BRIDGE_JS}\n${applyWebViewScaleJs}\n${FKEY_BRIDGE_JS}\n${TITLE_BRIDGE_JS}\n${FAVICON_BRIDGE_JS}`
 }

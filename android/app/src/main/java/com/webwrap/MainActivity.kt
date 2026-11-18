@@ -30,6 +30,12 @@ class MainActivity : ReactActivity() {
     super.onCreate(savedInstanceState)
     // Keep content below the status bar / clock (Android 15+ otherwise forces edge-to-edge).
     WindowCompat.setDecorFitsSystemWindows(window, true)
+    DashAppIdentity.applyToActivity(this)
+  }
+
+  override fun onResume() {
+    super.onResume()
+    DashAppIdentity.applyToActivity(this)
   }
 
   /**

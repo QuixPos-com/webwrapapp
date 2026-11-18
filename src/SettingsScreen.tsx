@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -28,6 +29,7 @@ import {
   pickAndSaveLocalCert,
   saveLocalCertFromPayload,
 } from './dashCert'
+import { DEFAULT_APP_NAME, requestPinWebsiteShortcut } from './dashAppIdentity'
 import { CertQrScanner } from './CertQrScanner'
 
 type Props = {
@@ -38,6 +40,8 @@ type Props = {
   /** Currently loaded dashboard URL (after local probe / remote fallback). */
   activeConnectionUrl: string | null
   activeConnectionKind: 'local' | 'remote' | null
+  appName?: string
+  appIconUri?: string | null
 }
 
 export default function SettingsScreen({
@@ -46,6 +50,8 @@ export default function SettingsScreen({
   onLocalCertChanged,
   activeConnectionUrl,
   activeConnectionKind,
+  appName,
+  appIconUri,
 }: Props): React.JSX.Element {
   const isDarkMode = useColorScheme() === 'dark'
   const [loading, setLoading] = useState(true)
@@ -220,6 +226,15 @@ export default function SettingsScreen({
     [onLocalCertChanged],
   )
 
+  const displayAppName = appName?.trim() || DEFAULT_APP_NAME
+
+  const handlePinShortcut = useCallback(async () => {
+    const ok = await requestPinWebsiteShortcut()
+    if (!ok) {
+      Alert.alert('Home Screen Shortcut', 'Your launcher does not support pinning shortcuts directly.')
+    }
+  }, [])
+
   const connectionKindLabel =
     activeConnectionKind === 'local'
       ? 'Local'
@@ -234,7 +249,12 @@ export default function SettingsScreen({
           <Pressable onPress={onClose} hitSlop={8} style={styles.headerBtn}>
             <IonIcon name="close" size={24} color={textColor} />
           </Pressable>
-          <Text style={[styles.headerTitle, { color: textColor }]}>Settings</Text>
+          <View style={styles.headerCenter}>
+            {appIconUri ? <Image source={{ uri: appIconUri }} style={styles.headerIcon} /> : null}
+            <Text numberOfLines={1} style={[styles.headerTitle, { color: textColor }]}>
+              {displayAppName} · Settings
+            </Text>
+          </View>
           <View style={styles.headerBtn} />
         </View>
         <View style={styles.loadingWrap}>
@@ -250,7 +270,12 @@ export default function SettingsScreen({
         <Pressable onPress={onClose} hitSlop={8} style={styles.headerBtn} accessibilityLabel="Close settings">
           <IonIcon name="close" size={24} color={textColor} />
         </Pressable>
-        <Text style={[styles.headerTitle, { color: textColor }]}>Settings</Text>
+        <View style={styles.headerCenter}>
+          {appIconUri ? <Image source={{ uri: appIconUri }} style={styles.headerIcon} /> : null}
+          <Text numberOfLines={1} style={[styles.headerTitle, { color: textColor }]}>
+            {displayAppName} · Settings
+          </Text>
+        </View>
         <Pressable
           onPress={handleSave}
           disabled={saving}
@@ -267,14 +292,34 @@ export default function SettingsScreen({
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={[styles.card, { backgroundColor: cardColor, borderColor }]}>
           <Text style={[styles.sectionTitle, { color: textColor }]}>Active connection</Text>
-          <Text style={[styles.hint, { color: mutedColor }]}>
-            {connectionKindLabel
-              ? `Using ${connectionKindLabel.toLowerCase()} URL`
-              : 'Resolving…'}
-          </Text>
+          <View style={styles.identityRow}>
+            {appIconUri ? (
+              <Image source={{ uri: appIconUri }} style={styles.identityIcon} />
+            ) : (
+              <View style={[styles.identityIconPlaceholder, { borderColor }]}>
+                <IonIcon name="globe-outline" size={22} color={mutedColor} />
+              </View>
+            )}
+            <View style={styles.identityTextCol}>
+              <Text numberOfLines={1} style={[styles.identityName, { color: textColor }]}>
+                {displayAppName}
+              </Text>
+              <Text style={[styles.hint, { color: mutedColor, marginTop: 0 }]}>
+                {connectionKindLabel
+                  ? `Using ${connectionKindLabel.toLowerCase()} URL`
+                  : 'Resolving…'}
+              </Text>
+            </View>
+          </View>
           <Text selectable style={[styles.activeUrl, { color: textColor }]}>
             {activeConnectionUrl ?? '—'}
           </Text>
+          {activeConnectionUrl ? (
+            <Pressable onPress={handlePinShortcut} style={styles.addRow} hitSlop={8}>
+              <IonIcon name="apps-outline" size={20} color="#2196F3" />
+              <Text style={styles.addLabel}>Add icon to Home screen</Text>
+            </Pressable>
+          ) : null}
         </View>
 
         <View style={[styles.card, { backgroundColor: cardColor, borderColor }]}>
@@ -445,6 +490,46 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 17,
+    fontWeight: '600',
+    flexShrink: 1,
+  },
+  headerCenter: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 8,
+  },
+  headerIcon: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+  },
+  identityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  identityIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+  },
+  identityIconPlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  identityTextCol: {
+    flex: 1,
+    gap: 2,
+  },
+  identityName: {
+    fontSize: 16,
     fontWeight: '600',
   },
   saveLabel: {

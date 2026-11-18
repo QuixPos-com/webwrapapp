@@ -112,6 +112,10 @@ export function useTabs(webRefs: React.MutableRefObject<Record<string, WebView<{
     setTabTitles((prev) => (prev[tabId] === nextTitle ? prev : { ...prev, [tabId]: nextTitle }))
   }, [])
 
+  const clearTabTitles = useCallback(() => {
+    setTabTitles({})
+  }, [])
+
   const toggleTabDeleteMode = useCallback(() => {
     setTabDeleteMode((on) => {
       if (on) {
@@ -140,6 +144,7 @@ export function useTabs(webRefs: React.MutableRefObject<Record<string, WebView<{
     selectOrCreateTab,
     closeTab,
     handleTabTitle,
+    clearTabTitles,
     toggleTabDeleteMode,
   }
 }

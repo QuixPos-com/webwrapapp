@@ -22,6 +22,7 @@ type DashWebViewsProps = {
   focusActiveWebView: (tabId?: string) => void
   selectOrCreateTab: (count: number) => void
   onTabTitle: (tabId: string, title: string | undefined) => void
+  onPageFavicon?: (iconUrl: string | null, dataUri: string | null) => void
 }
 
 export function DashWebViews({
@@ -36,6 +37,7 @@ export function DashWebViews({
   focusActiveWebView,
   selectOrCreateTab,
   onTabTitle,
+  onPageFavicon,
 }: DashWebViewsProps): React.JSX.Element {
   const respondClipboardRead = useCallback((tabId: string, requestId: string, dataUri: string | null) => {
     console.log(
@@ -169,6 +171,12 @@ export function DashWebViews({
                 }
                 if (msg?.type === 'pageTitle' && typeof msg.title === 'string') {
                   onTabTitle(tab.id, msg.title)
+                  return
+                }
+                if (msg?.type === 'pageFavicon') {
+                  const iconUrl = typeof msg.iconUrl === 'string' ? msg.iconUrl : null
+                  const dataUri = typeof msg.dataUri === 'string' ? msg.dataUri : null
+                  onPageFavicon?.(iconUrl, dataUri)
                   return
                 }
                 if (msg?.type === 'fkey' && typeof msg.n === 'number') {
